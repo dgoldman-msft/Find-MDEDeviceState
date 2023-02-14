@@ -116,22 +116,56 @@
 					$null = $failedConnections.Add($failure)
 				}
 				else {
-					$null = $connection.OnboardedInfo -match '(orgId\\).*(\w{8}-\w{4}-\w{4}-\w{4}-\w{12})'
-					if ($matches[0]) { $orgId = $matches[0].ToString() } else { $orgId = "Not Found".ToString() }
+					$data = $connection.OnboardedInfo -split ','
+					if (($data[0] -split '\"')[5] -ne ':[]') { $previousOrgID = ($data[0] -split '\"')[5] } else { $previousOrgID = "No previous orgId".ToString() }
+					if (($data[1] -split '\"')[3] -match '(\w{8}-\w{4}-\w{4}-\w{4}-\w{12})') { $orgId = $matches[0] } else { $orgId = "No orgId".ToString() }
+					if (($data[2] -split '\"')[3] -match '((http[s]?)(:\/\/)([^\s,]+))') { $geoLocationUrl = $matches[0] } else { $geoLocationUrl = "No geoLocationUrl" }
+					if (($data[3] -split '\"')[3] -match '([a-zA-Z0-9]+)') { $dataCenter = $matches[0] } else { $dataCenter = "No dataCenter location" }
+					if (($data[4] -split '\"')[3] -match '([a-zA-Z0-9]+)') { $geoLocation = $matches[0] } else { $geoLocation = "No geoLocation" }
 
 					$machineInfo = [PSCustomObject]@{
-						MachineName   = $computer
-						SenseGuid     = $connection.senseGuid
-						SenseId       = $connection.senseId
-						OnboardedInfo = $orgId
+						MachineName      = $computer
+						SenseGuid        = $connection.senseGuid
+						SenseId          = $connection.senseId
+						DataCenter       = $dataCenter
+						PreviousOrgID    = $previousOrgID
+						OrgId            = $orgId
+						GeoLocation      = $geoLocation
+						GeoLocationUrl   = $geoLocationUrl.TrimEnd('/\')
+						DiagtrackService = 'N/A'
+						SenseService     = 'N/A'
 					}
+
+					try {
+						# Service checks
+						$services = @('diagtrack', 'sense')
+						foreach ($service in $services) {
+							Write-Verbose "Checking state of $($service) service"
+							Start-Process -FilePath "C:\Windows\System32\sc.exe" -ArgumentList "qc $($service)" -NoNewWindow -RedirectStandardOutput "$env:Temp\$($service).txt" -Wait -ErrorAction SilentlyContinue
+							$scStatus = Get-Content "$env:Temp\$($service).txt"
+							if ((($scStatus -replace '\s+')[4] -split '([0-9]{1})')[2] -eq 'AUTO_START') {
+								Write-Verbose "$($service) Service check: GOOD"
+								if ($services -eq 'diagtrack') { $machineInfo.DiagtrackService = "Service check: GOOD".ToString() }
+								if ($services -eq 'sense') { $machineInfo.SenseService = "Service check: GOOD".ToString() }
+							}
+							else {
+								Write-Verbose "ERROR: $($service) service check: failed! Service is not set to AUTO_START. Please run: sc config $($service) start=auto"
+								if ($services -eq 'diagtrack') { $machineInfo.DiagtrackService = "Service check: Failed!".ToString() }
+								if ($services -eq 'sense') { $machineInfo.SenseService = "Service check: Failed!".ToString() }
+							}
+						}
+					}
+					catch {
+						Write-Output "Error: $_"
+					}
+
 					$successfulConnectionsFound ++
 					$null = $computerObjects.Add($machineInfo)
 				}
 			}
 
 			if ($parameters.ContainsKey('ShowResults')) {
-				$computerObjects | Select-Object MachineName, SenseGuid, SenseId, OnboardedInfo | Sort-Object -Property MachineName | Format-Table
+				$computerObjects | Select-Object MachineName, SenseGuid, SenseId, DataCenter, PreviousOrgID, OrgId, GeoLocation, GeoLocationUrl, DiagtrackService, SenseService | Sort-Object -Property MachineName
 			}
 		}
 		catch {
@@ -150,12 +184,12 @@
 	}
 
 	end {
-		Write-Output "There were $($successfulConnectionsFound) successful connections "
+		Write-Output "There were $($successfulConnectionsFound) successful connections"
 		Write-Output "There were $($failedConnectionsFound) failed connections"
 		if ($parameters.ContainsKey('SaveResults')) {
-			Write-Output "Saving registry data to $($LoggingPath)"
+			Write-Output "Saving data to $($LoggingPath)"
 			Write-Output "Saving failed connection data to $($FailureLoggingPath)"
 		}
-		Write-Output "MDE discovery process completed!"
+		Write-Output "MDE discovery process completed!`r`nFor more information on troubleshooting MDE onboarding issues please see: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/troubleshoot-onboarding?view=o365-worldwide"
 	}
 }
