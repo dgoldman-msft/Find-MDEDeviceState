@@ -6,6 +6,9 @@
 	.DESCRIPTION
 		Find the MDE onboarding state of a device
 
+	.PARAMETER CheckDomain
+		Query the local active directory domain
+
 	.PARAMETER ComputerName
 		Name of computer or computers you want to search
 
@@ -58,6 +61,9 @@
 	[OutputType('System.String')]
 	[OutputType('System.IO.File')]
 	param(
+		[switch]
+		$CheckDomain,
+
 		[object[]]
 		$ComputerName,
 
@@ -88,15 +94,35 @@
 
 	process {
 		try {
-			if (-NOT ($ComputerName)) {
-				Write-Verbose "No computer name passed in. Retrieving full domain computer list"
+			if ($parameters.ContainsKey('CheckDomain')) {
+				Write-Output "Checking if we are on a domain to retrieve a full domain computer list"
 				$computers = Get-ADComputer -Filter * | Select-Object -ExpandProperty Name -ErrorAction Stop
 			}
 			else {
-				$computers = $ComputerName
+				if (-NOT ($ComputerName)) {
+					Write-Output "You need to specify a computer name."
+					return
+				}
+				else {
+					$computers = $ComputerName
+				}
 			}
 
 			foreach ($computer in $computers) {
+				Write-Verbose "Testing connection to: $($computer)"
+				$testCmdParameters = @{
+					ComputerName  = $ComputerName
+					Quiet         = $True
+					ErrorAction   = "SilentlyContinue"
+					ErrorVariable = "FailedConnection"
+				}
+				if (-NOT(Test-Connection @testCmdParameters)) {
+					Write-Verbose "Unable to reach: $($computer)"
+					$failedConnectionsFound ++
+					$null = $failedConnections.Add($failure)
+					return
+				}
+
 				if (-NOT ($parameters.ContainsKey('DisableProgressBar'))) {
 					$policyCounter ++
 					Write-Progress -Activity "Querying: $computer. Total computers found: $($computers.Count)" -Status "Querying computer list #: $progressCounter" -PercentComplete ($progressCounter / $computers.count * 100)
@@ -106,7 +132,14 @@
 					Write-Verbose "Progress bar has been disabled"
 				}
 
-				if (-NOT ($connection = Invoke-Command -ComputerName $computer -ScriptBlock { Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection" } -ErrorAction SilentlyContinue -ErrorVariable FailedConnection)) {
+				$registryCmdParameters = @{
+					ComputerName  = $ComputerName
+					ScriptBlock   = { Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection" }
+					ErrorAction   = "SilentlyContinue"
+					ErrorVariable = "FailedConnection"
+				}
+
+				if (-NOT ($connection = Invoke-Command @registryCmdParameters)) {
 					$failure = [PSCustomObject]@{
 						MachineName = $computer
 						ErrorId     = $FailedConnection.FullyQualifiedErrorId
@@ -175,7 +208,9 @@
 		try {
 			if ($parameters.ContainsKey('SaveResults')) {
 				[PSCustomObject]$computerObjects | Export-Csv -Path $LoggingPath -ErrorAction Stop -Encoding UTF8 -NoTypeInformation -Append
+				Write-Output "Saving data to $($LoggingPath)"
 				[PSCustomObject]$failedConnections | Export-Csv -Path $FailureLoggingPath -ErrorAction Stop -Encoding UTF8 -NoTypeInformation -Append
+				Write-Output "Saving failed connection data to $($FailureLoggingPath)"
 			}
 		}
 		catch {
@@ -184,12 +219,8 @@
 	}
 
 	end {
-		Write-Output "There were $($successfulConnectionsFound) successful connections"
-		Write-Output "There were $($failedConnectionsFound) failed connections"
-		if ($parameters.ContainsKey('SaveResults')) {
-			Write-Output "Saving data to $($LoggingPath)"
-			Write-Output "Saving failed connection data to $($FailureLoggingPath)"
-		}
+		Write-Verbose "There were $($successfulConnectionsFound) successful connections"
+		Write-Verbose "There were $($failedConnectionsFound) failed connections"
 		Write-Output "MDE discovery process completed!`r`nFor more information on troubleshooting MDE onboarding issues please see: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/troubleshoot-onboarding?view=o365-worldwide"
 	}
 }
