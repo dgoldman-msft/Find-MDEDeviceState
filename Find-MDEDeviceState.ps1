@@ -116,6 +116,7 @@
 					ErrorAction   = "SilentlyContinue"
 					ErrorVariable = "FailedConnection"
 				}
+				
 				if (-NOT(Test-Connection @testCmdParameters)) {
 					Write-Verbose "Unable to reach: $($computer)"
 					$failedConnectionsFound ++
